@@ -125,6 +125,7 @@ pub struct BeancountSources {
     included_globs: HashMap<PathBuf, IncludedGlob>,
     included_content: HashMap<PathBuf, IncludedSource>,
     source_id_strings: Vec<String>, // indexed by SourceId
+    line_offsets: Vec<Vec<usize>>,  // newline rune-positions per SourceId, for O(log n) line lookup
 }
 
 #[derive(Clone, Debug)]
@@ -312,6 +313,16 @@ impl BeancountSources {
             .map(|(i, _)| i)
             .collect::<Vec<_>>();
 
+        let nl = |s: &str| s.chars().enumerate()
+            .filter_map(|(i, c)| (c == '\n').then_some(i)).collect();
+        let mut line_offsets: Vec<Vec<usize>> = vec![Vec::new(); source_id_strings.len()];
+        line_offsets[Into::<usize>::into(root_source_id)] = nl(&root_content);
+        for (_, s) in &included_content {
+            if let IncludedSource::Content(id, c, _) = s {
+                line_offsets[Into::<usize>::into(*id)] = nl(c);
+            }
+        }
+
         Self {
             root_path,
             root_source_id,
@@ -320,6 +331,7 @@ impl BeancountSources {
             included_globs,
             included_content,
             source_id_strings,
+            line_offsets,
         }
     }
 
@@ -418,19 +430,9 @@ impl BeancountSources {
             Some(source_id_str)
         };
 
-        let mut source_chars = source_content.chars();
-        let start_line = source_chars
-            .by_ref()
-            .take(rune_span.start)
-            .filter(|c| *c == '\n')
-            .count()
-            + 1;
-        let lines_spanned = source_chars
-            .by_ref()
-            .take(rune_span.end - rune_span.start)
-            .filter(|c| *c == '\n')
-            .count();
-        let end_line = start_line + lines_spanned;
+        let offsets = &self.line_offsets[span.source.min(self.line_offsets.len() - 1)];
+        let start_line = offsets.partition_point(|&o| o < rune_span.start) + 1;
+        let end_line = offsets.partition_point(|&o| o < rune_span.end) + 1;
 
         SpannedSource {
             file_name,

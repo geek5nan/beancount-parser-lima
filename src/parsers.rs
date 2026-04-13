@@ -10,6 +10,15 @@ use chumsky::{
         skip_then_retry_until,
     },
 };
+
+macro_rules! maybe_box {
+    ($parser:expr) => {{
+        #[cfg(debug_assertions)]
+        { $parser.boxed() }
+        #[cfg(not(debug_assertions))]
+        { $parser }
+    }};
+}
 use either::Either;
 use rust_decimal::Decimal;
 use std::{
@@ -25,16 +34,18 @@ pub(crate) fn includes<'s, I>() -> impl Parser<'s, I, Vec<String>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    (just(Token::Include).ignore_then(string()).map(Some))
-        .or(any_ref().map(|_| None))
-        .repeated()
-        .collect::<Vec<_>>()
-        .map(|includes| {
-            includes
-                .into_iter()
-                .filter_map(|s| s.as_ref().map(|s| s.to_string()))
-                .collect::<Vec<_>>()
-        })
+    maybe_box!(
+        (just(Token::Include).ignore_then(string()).map(Some))
+            .or(any_ref().map(|_| None))
+            .repeated()
+            .collect::<Vec<_>>()
+            .map(|includes| {
+                includes
+                    .into_iter()
+                    .filter_map(|s| s.as_ref().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+    )
 }
 
 /// Matches the whole file.
@@ -44,7 +55,7 @@ pub(crate) fn file<'s, I>(
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    declaration(source_path).repeated().collect::<Vec<_>>()
+    maybe_box!(declaration(source_path).repeated().collect::<Vec<_>>())
 }
 
 /// Matches a [Declaration], and returns with Span.
@@ -56,9 +67,11 @@ where
 {
     use Declaration::*;
 
-    choice((directive().map(Directive), pragma(source_path).map(Pragma)))
-        .map_with(spanned_extra)
-        .recover_with(skip_then_retry_until(any_ref().ignored(), end()))
+    maybe_box!(
+        choice((directive().map(Directive), pragma(source_path).map(Pragma)))
+            .map_with(spanned_extra)
+            .recover_with(skip_then_retry_until(any_ref().ignored(), end()))
+    )
 }
 
 /// Matches a [Directive].
@@ -66,7 +79,7 @@ pub(crate) fn directive<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    choice((
+    maybe_box!(choice((
         transaction().labelled("transaction").as_context(),
         choice((
             price(),
@@ -83,7 +96,7 @@ where
         ))
         .labelled("directive")
         .as_context(),
-    ))
+    )))
 }
 
 /// Matches a [Pragma].
@@ -93,36 +106,38 @@ pub(crate) fn pragma<'s, I>(
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    choice((
-        just(Token::Pushtag)
-            .ignore_then(tag())
-            .map_with(|tag, e| Pragma::Pushtag(spanned_(tag, e.span()))),
-        just(Token::Poptag)
-            .ignore_then(tag())
-            .map_with(|tag, e| Pragma::Poptag(spanned_(tag, e.span()))),
-        just(Token::Pushmeta)
-            .ignore_then(meta_key_value())
-            .map(Pragma::Pushmeta),
-        just(Token::Popmeta)
-            .ignore_then(key())
-            .then_ignore(just(Token::Colon))
-            .map_with(|key, e| Pragma::Popmeta(spanned_(key, e.span()))),
-        just(Token::Include)
-            .ignore_then(string().map_with(|path, e| Pragma::Include(spanned_(path, e.span())))),
-        option(source_path).map(Pragma::Option),
-        just(Token::Plugin)
-            .ignore_then(string().map_with(spanned_extra))
-            .then(string().map_with(spanned_extra).or_not())
-            .map(|(module_name, config)| {
-                Pragma::Plugin(Plugin {
-                    module_name,
-                    config,
-                })
-            }),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .labelled("directive") // yeah, pragma is not a user-facing concept
-    .as_context()
+    maybe_box!(
+        choice((
+            just(Token::Pushtag)
+                .ignore_then(tag())
+                .map_with(|tag, e| Pragma::Pushtag(spanned_(tag, e.span()))),
+            just(Token::Poptag)
+                .ignore_then(tag())
+                .map_with(|tag, e| Pragma::Poptag(spanned_(tag, e.span()))),
+            just(Token::Pushmeta)
+                .ignore_then(meta_key_value())
+                .map(Pragma::Pushmeta),
+            just(Token::Popmeta)
+                .ignore_then(key())
+                .then_ignore(just(Token::Colon))
+                .map_with(|key, e| Pragma::Popmeta(spanned_(key, e.span()))),
+            just(Token::Include)
+                .ignore_then(string().map_with(|path, e| Pragma::Include(spanned_(path, e.span())))),
+            option(source_path).map(Pragma::Option),
+            just(Token::Plugin)
+                .ignore_then(string().map_with(spanned_extra))
+                .then(string().map_with(spanned_extra).or_not())
+                .map(|(module_name, config)| {
+                    Pragma::Plugin(Plugin {
+                        module_name,
+                        config,
+                    })
+                }),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .labelled("directive") // yeah, pragma is not a user-facing concept
+        .as_context()
+    )
 }
 
 /// Matches a [BeancountOption], failing if the option cannot be processed.
@@ -132,7 +147,7 @@ pub(crate) fn option<'s, I>(
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    just(Token::Option)
+    maybe_box!(just(Token::Option)
         .ignore_then(string().map_with(|name, e| spanned_(name, e.span())))
         .then(string().map_with(|value, e| spanned_(value, e.span())))
         .validate(move |(name, value), e, emitter| {
@@ -158,7 +173,7 @@ where
                 emitter.emit(e);
                 BeancountOption::ignored()
             })
-        })
+        }))
 }
 
 /// Matches a transaction, including metadata and postings, over several lines.
@@ -166,29 +181,31 @@ pub(crate) fn transaction<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        transaction_header_line(),
-        metadata().map_with(spanned_extra),
-        posting().repeated().collect::<Vec<_>>(),
-    ))
-    .validate(
-        |((date, flag, (payee, narration), (tags, links)), mut metadata, postings),
-         _span,
-         emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((
+            transaction_header_line(),
+            metadata().map_with(spanned_extra),
+            posting().repeated().collect::<Vec<_>>(),
+        ))
+        .validate(
+            |((date, flag, (payee, narration), (tags, links)), mut metadata, postings),
+             _span,
+             emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Transaction(Transaction {
-                    flag,
-                    payee,
-                    narration,
-                    postings,
-                }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Transaction(Transaction {
+                        flag,
+                        payee,
+                        narration,
+                        postings,
+                    }),
+                }
+            },
+        )
     )
 }
 
@@ -204,28 +221,30 @@ fn transaction_header_line<'s, I>() -> impl Parser<'s, I, TransactionHeaderLine<
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        txn().map_with(spanned_extra),
-        // payee and narration get special handling in case one is omitted
+    maybe_box!(
         group((
-            string().map_with(spanned_extra).or_not(),
-            string().map_with(spanned_extra).or_not(),
+            date().map_with(spanned_extra),
+            txn().map_with(spanned_extra),
+            // payee and narration get special handling in case one is omitted
+            group((
+                string().map_with(spanned_extra).or_not(),
+                string().map_with(spanned_extra).or_not(),
+            ))
+            .map(|(s1, s2)| match (s1, s2) {
+                // a single string is narration
+                (Some(s1), None) => (None, Some(s1)),
+                (s1, s2) => (s1, s2),
+            })
+            .map(|(payee, narration)| {
+                (
+                    replace_some_empty_with_none(payee),
+                    replace_some_empty_with_none(narration),
+                )
+            }),
+            tags_links(),
         ))
-        .map(|(s1, s2)| match (s1, s2) {
-            // a single string is narration
-            (Some(s1), None) => (None, Some(s1)),
-            (s1, s2) => (s1, s2),
-        })
-        .map(|(payee, narration)| {
-            (
-                replace_some_empty_with_none(payee),
-                replace_some_empty_with_none(narration),
-            )
-        }),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+    )
 }
 
 fn replace_some_empty_with_none(s: Option<Spanned<&str>>) -> Option<Spanned<&str>> {
@@ -246,28 +265,30 @@ pub(crate) fn price<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Price),
-        currency().map_with(spanned_extra),
-        amount().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, currency, amount, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Price(Price { currency, amount }),
-            }
-        },
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Price),
+            currency().map_with(spanned_extra),
+            amount().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, currency, amount, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Price(Price { currency, amount }),
+                }
+            },
+        )
+        .labelled("price")
+        .as_context()
     )
-    .labelled("price")
-    .as_context()
 }
 
 /// Matches a balance directive, including metadata, over several lines.
@@ -275,28 +296,30 @@ pub(crate) fn balance<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Balance),
-        account().map_with(spanned_extra),
-        amount_with_tolerance().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, account, atol, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Balance(Balance { account, atol }),
-            }
-        },
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Balance),
+            account().map_with(spanned_extra),
+            amount_with_tolerance().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, account, atol, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Balance(Balance { account, atol }),
+                }
+            },
+        )
+        .labelled("balance")
+        .as_context()
     )
-    .labelled("balance")
-    .as_context()
 }
 
 /// Matches a open, including metadata, over several lines.
@@ -304,21 +327,23 @@ pub(crate) fn open<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((open_header_line(), metadata().map_with(spanned_extra))).validate(
-        |((date, account, currencies, booking, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((open_header_line(), metadata().map_with(spanned_extra))).validate(
+            |((date, account, currencies, booking, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Open(Open {
-                    account,
-                    currencies,
-                    booking,
-                }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Open(Open {
+                        account,
+                        currencies,
+                        booking,
+                    }),
+                }
+            },
+        )
     )
 }
 
@@ -335,18 +360,20 @@ fn open_header_line<'s, I>() -> impl Parser<'s, I, OpenHeaderLine<'s>, Extra<'s>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Open),
-        account().map_with(spanned_extra),
-        currency_list(),
-        booking().map_with(spanned_extra).or_not(),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .map(|(date, _, account, currency, booking, tags_links)| {
-        (date, account, currency, booking, tags_links)
-    })
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Open),
+            account().map_with(spanned_extra),
+            currency_list(),
+            booking().map_with(spanned_extra).or_not(),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .map(|(date, _, account, currency, booking, tags_links)| {
+            (date, account, currency, booking, tags_links)
+        })
+    )
 }
 
 /// Matches zero or more currencies, comma-separated.
@@ -412,25 +439,27 @@ pub(crate) fn close<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Close),
-        account().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, account, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Close),
+            account().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, account, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Close(Close { account }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Close(Close { account }),
+                }
+            },
+        )
     )
 }
 
@@ -439,25 +468,27 @@ pub(crate) fn commodity<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Commodity),
-        currency().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, currency, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Commodity),
+            currency().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, currency, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Commodity(Commodity { currency }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Commodity(Commodity { currency }),
+                }
+            },
+        )
     )
 }
 
@@ -466,26 +497,28 @@ pub(crate) fn pad<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Pad),
-        account().map_with(spanned_extra),
-        account().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, account, source, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Pad),
+            account().map_with(spanned_extra),
+            account().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, account, source, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Pad(Pad { account, source }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Pad(Pad { account, source }),
+                }
+            },
+        )
     )
 }
 
@@ -494,26 +527,28 @@ pub(crate) fn document<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Document),
-        account().map_with(spanned_extra),
-        string().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, account, path, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Document),
+            account().map_with(spanned_extra),
+            string().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, account, path, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Document(Document { account, path }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Document(Document { account, path }),
+                }
+            },
+        )
     )
 }
 
@@ -522,26 +557,28 @@ pub(crate) fn note<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Note),
-        account().map_with(spanned_extra),
-        string().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, account, comment, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Note),
+            account().map_with(spanned_extra),
+            string().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, account, comment, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Note(Note { account, comment }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Note(Note { account, comment }),
+                }
+            },
+        )
     )
 }
 
@@ -550,29 +587,31 @@ pub(crate) fn event<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Event),
-        string().map_with(spanned_extra),
-        string().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, event_type, description, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Event),
+            string().map_with(spanned_extra),
+            string().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, event_type, description, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Event(Event {
-                    event_type,
-                    description,
-                }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Event(Event {
+                        event_type,
+                        description,
+                    }),
+                }
+            },
+        )
     )
 }
 
@@ -581,26 +620,28 @@ pub(crate) fn query<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Query),
-        string().map_with(spanned_extra),
-        string().map_with(spanned_extra),
-        tags_links(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .validate(
-        |((date, _, name, content, (tags, links)), mut metadata), _span, emitter| {
-            metadata.merge_tags(&tags, emitter);
-            metadata.merge_links(&links, emitter);
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Query),
+            string().map_with(spanned_extra),
+            string().map_with(spanned_extra),
+            tags_links(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .validate(
+            |((date, _, name, content, (tags, links)), mut metadata), _span, emitter| {
+                metadata.merge_tags(&tags, emitter);
+                metadata.merge_links(&links, emitter);
 
-            Directive {
-                date,
-                metadata,
-                variant: DirectiveVariant::Query(Query { name, content }),
-            }
-        },
+                Directive {
+                    date,
+                    metadata,
+                    variant: DirectiveVariant::Query(Query { name, content }),
+                }
+            },
+        )
     )
 }
 
@@ -609,22 +650,24 @@ pub(crate) fn custom<'s, I>() -> impl Parser<'s, I, Directive<'s>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    group((
-        date().map_with(spanned_extra),
-        just(Token::Custom),
-        string().map_with(spanned_extra),
-        meta_value()
-            .map_with(spanned_extra)
-            .repeated()
-            .collect::<Vec<_>>(),
-    ))
-    .then_ignore(choice((just(Token::Eol).ignored(), end())))
-    .then(metadata().map_with(spanned_extra))
-    .map(|((date, _, type_, values), metadata)| Directive {
-        date,
-        metadata,
-        variant: DirectiveVariant::Custom(Custom { type_, values }),
-    })
+    maybe_box!(
+        group((
+            date().map_with(spanned_extra),
+            just(Token::Custom),
+            string().map_with(spanned_extra),
+            meta_value()
+                .map_with(spanned_extra)
+                .repeated()
+                .collect::<Vec<_>>(),
+        ))
+        .then_ignore(choice((just(Token::Eol).ignored(), end())))
+        .then(metadata().map_with(spanned_extra))
+        .map(|((date, _, type_, values), metadata)| Directive {
+            date,
+            metadata,
+            variant: DirectiveVariant::Custom(Custom { type_, values }),
+        })
+    )
 }
 
 /// Matches the `txn` keyword or a flag.
@@ -654,48 +697,50 @@ fn posting<'s, I>() -> impl Parser<'s, I, Spanned<Posting<'s>>, Extra<'s>>
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    just(Token::Indent)
-        .ignore_then(
-            group((
-                flag().map_with(spanned_extra).or_not(),
-                account().map_with(spanned_extra),
-                expr_value().map_with(spanned_extra).or_not(),
-                currency().map_with(spanned_extra).or_not(),
-                cost_spec().or_not().map_with(|cost_spec, e| {
-                    cost_spec.map(|cost_spec| spanned_(cost_spec, e.span()))
-                }),
-                price_annotation().or_not().map_with(|price_spec, e| {
-                    price_spec.map(|price_spec| spanned_(price_spec, e.span()))
-                }),
-            ))
-            .map_with(spanned_extra)
-            .then_ignore(choice((just(Token::Eol).ignored(), end())))
-            .then(metadata().map_with(spanned_extra))
-            .map(
-                |(
-                    Spanned {
-                        item: (flag, account, amount, currency, cost_spec, price_annotation),
-                        span: posting_span_without_metadata,
-                    },
-                    metadata,
-                )| {
-                    spanned(
-                        Posting {
-                            flag,
-                            account,
-                            amount,
-                            currency,
-                            cost_spec,
-                            price_annotation,
-                            metadata,
+    maybe_box!(
+        just(Token::Indent)
+            .ignore_then(
+                group((
+                    flag().map_with(spanned_extra).or_not(),
+                    account().map_with(spanned_extra),
+                    expr_value().map_with(spanned_extra).or_not(),
+                    currency().map_with(spanned_extra).or_not(),
+                    cost_spec().or_not().map_with(|cost_spec, e| {
+                        cost_spec.map(|cost_spec| spanned_(cost_spec, e.span()))
+                    }),
+                    price_annotation().or_not().map_with(|price_spec, e| {
+                        price_spec.map(|price_spec| spanned_(price_spec, e.span()))
+                    }),
+                ))
+                .map_with(spanned_extra)
+                .then_ignore(choice((just(Token::Eol).ignored(), end())))
+                .then(metadata().map_with(spanned_extra))
+                .map(
+                    |(
+                        Spanned {
+                            item: (flag, account, amount, currency, cost_spec, price_annotation),
+                            span: posting_span_without_metadata,
                         },
-                        posting_span_without_metadata,
-                    )
-                },
-            ),
-        )
-        .labelled("posting")
-        .as_context()
+                        metadata,
+                    )| {
+                        spanned(
+                            Posting {
+                                flag,
+                                account,
+                                amount,
+                                currency,
+                                cost_spec,
+                                price_annotation,
+                                metadata,
+                            },
+                            posting_span_without_metadata,
+                        )
+                    },
+                ),
+            )
+            .labelled("posting")
+            .as_context()
+    )
 }
 
 /// Matches [Metadata], over several lines.
@@ -705,58 +750,60 @@ where
 {
     use Metadatum::*;
 
-    metadatum_line()
-        .repeated()
-        .collect::<Vec<_>>()
-        .validate(|metadata, _span, emitter| {
-            // collate by type of metadatum
-            metadata
-                .into_iter()
-                .fold(Metadata::default(), |mut m, item| match item {
-                    KeyValue(kv) => {
-                        use hash_map::Entry::*;
+    maybe_box!(
+        metadatum_line()
+            .repeated()
+            .collect::<Vec<_>>()
+            .validate(|metadata, _span, emitter| {
+                // collate by type of metadatum
+                metadata
+                    .into_iter()
+                    .fold(Metadata::default(), |mut m, item| match item {
+                        KeyValue(kv) => {
+                            use hash_map::Entry::*;
 
-                        let MetaKeyValue { key, value } = kv.item;
+                            let MetaKeyValue { key, value } = kv.item;
 
-                        let key_span = key.span;
-                        match m.key_values.entry(key) {
-                            Occupied(entry) => emitter.emit(Rich::custom(
-                                key_span.into(),
-                                format!("duplicate key {}", entry.key()),
-                            )),
-                            Vacant(entry) => {
-                                entry.insert(value);
+                            let key_span = key.span;
+                            match m.key_values.entry(key) {
+                                Occupied(entry) => emitter.emit(Rich::custom(
+                                    key_span.into(),
+                                    format!("duplicate key {}", entry.key()),
+                                )),
+                                Vacant(entry) => {
+                                    entry.insert(value);
+                                }
                             }
-                        }
 
-                        m
-                    }
-                    Tag(tag) => {
-                        if m.tags.contains(&tag) {
-                            emitter.emit(Rich::custom(
-                                tag.span.into(),
-                                format!("duplicate tag {}", tag),
-                            ))
-                        } else {
-                            m.tags.insert(tag);
+                            m
                         }
+                        Tag(tag) => {
+                            if m.tags.contains(&tag) {
+                                emitter.emit(Rich::custom(
+                                    tag.span.into(),
+                                    format!("duplicate tag {}", tag),
+                                ))
+                            } else {
+                                m.tags.insert(tag);
+                            }
 
-                        m
-                    }
-                    Link(link) => {
-                        if m.links.contains(&link) {
-                            emitter.emit(Rich::custom(
-                                link.span.into(),
-                                format!("duplicate link {}", link),
-                            ))
-                        } else {
-                            m.links.insert(link);
+                            m
                         }
+                        Link(link) => {
+                            if m.links.contains(&link) {
+                                emitter.emit(Rich::custom(
+                                    link.span.into(),
+                                    format!("duplicate link {}", link),
+                                ))
+                            } else {
+                                m.links.insert(link);
+                            }
 
-                        m
-                    }
-                })
-        })
+                            m
+                        }
+                    })
+            })
+    )
 }
 
 /// A single instance of [Metadata]
@@ -787,17 +834,19 @@ where
 {
     use Metadatum::*;
 
-    just(Token::Indent)
-        .ignore_then(
-            choice((
-                meta_key_value().map_with(spanned_extra).map(KeyValue),
-                tag().map_with(spanned_extra).map(Tag),
-                link().map_with(spanned_extra).map(Link),
-            ))
-            .then_ignore(choice((just(Token::Eol).ignored(), end()))),
-        )
-        .labelled("metadata")
-        .as_context()
+    maybe_box!(
+        just(Token::Indent)
+            .ignore_then(
+                choice((
+                    meta_key_value().map_with(spanned_extra).map(KeyValue),
+                    tag().map_with(spanned_extra).map(Tag),
+                    link().map_with(spanned_extra).map(Link),
+                ))
+                .then_ignore(choice((just(Token::Eol).ignored(), end()))),
+            )
+            .labelled("metadata")
+            .as_context()
+    )
 }
 
 /// Matches a non-empty [MetaValue].
@@ -818,7 +867,7 @@ where
 {
     use SimpleValue::*;
 
-    choice((
+    maybe_box!(choice((
         string().map(String),
         currency().map(Currency),
         account().map(Account),
@@ -828,7 +877,7 @@ where
         bool().map(Bool),
         just(Token::Null).to(Null),
         expr_value().map(Expr),
-    ))
+    )))
 }
 
 pub(crate) fn amount<'s, I>() -> impl Parser<'s, I, Amount<'s>, Extra<'s>>
@@ -881,13 +930,13 @@ where
 {
     use CompoundAmount::*;
 
-    choice((
+    maybe_box!(choice((
         (compound_expr().then(currency())).map(|(amount, cur)| CurrencyAmount(amount, cur)),
         compound_expr().map(BareAmount),
         just(Token::Hash) // bare currency may or may not be preceeded by hash
             .or_not()
             .ignore_then(currency().map(BareCurrency)),
-    ))
+    )))
 }
 
 pub(crate) fn compound_expr<'s, I>() -> impl Parser<'s, I, CompoundExprValue, Extra<'s>>
@@ -896,7 +945,7 @@ where
 {
     use CompoundExprValue::*;
 
-    choice((
+    maybe_box!(choice((
         // try for both per-unit and total first
         expr_value()
             .then_ignore(just(Token::Hash))
@@ -905,7 +954,7 @@ where
         expr_value().then_ignore(just(Token::Hash)).map(PerUnit),
         expr_value().map(PerUnit),
         just(Token::Hash).ignore_then(expr_value()).map(Total),
-    ))
+    )))
 }
 
 pub(crate) fn scoped_expr<'s, I>() -> impl Parser<'s, I, ScopedExprValue, Extra<'s>>
@@ -914,11 +963,11 @@ where
 {
     use ScopedExprValue::*;
 
-    choice((
+    maybe_box!(choice((
         expr_value().then_ignore(just(Token::Hash)).map(PerUnit),
         expr_value().map(PerUnit),
         just(Token::Hash).ignore_then(expr_value()).map(Total),
-    ))
+    )))
 }
 
 pub(crate) fn price_annotation<'s, I>() -> impl Parser<'s, I, PriceSpec<'s>, Extra<'s>>
@@ -937,17 +986,19 @@ where
         }
     }
 
-    group((
-        choice((just(Token::At).to(false), just(Token::AtAt).to(true))),
-        expr_value().or_not(),
-        currency().or_not(),
-    ))
-    .try_map(|(is_total, amount, cur), _span| match (amount, cur) {
-        (Some(amount), Some(cur)) => Ok(CurrencyAmount(scope(amount, is_total), cur)),
-        (Some(amount), None) => Ok(BareAmount(scope(amount, is_total))),
-        (None, Some(cur)) => Ok(BareCurrency(cur)),
-        (None, None) => Ok(Unspecified),
-    })
+    maybe_box!(
+        group((
+            choice((just(Token::At).to(false), just(Token::AtAt).to(true))),
+            expr_value().or_not(),
+            currency().or_not(),
+        ))
+        .try_map(|(is_total, amount, cur), _span| match (amount, cur) {
+            (Some(amount), Some(cur)) => Ok(CurrencyAmount(scope(amount, is_total), cur)),
+            (Some(amount), None) => Ok(BareAmount(scope(amount, is_total))),
+            (None, Some(cur)) => Ok(BareCurrency(cur)),
+            (None, None) => Ok(Unspecified),
+        })
+    )
 }
 
 /// Matches a [CostSpec].
@@ -959,43 +1010,45 @@ where
     use self::CompoundAmount::*;
     use CostComp::*;
 
-    just(Token::Lcurl)
-        .ignore_then(
-            group((
-                cost_comp().map_with(spanned_extra),
-                (just(Token::Comma).ignore_then(cost_comp().map_with(spanned_extra)))
-                    .repeated()
-                    .collect::<Vec<_>>(),
-            ))
-            .or_not(), // allow for empty cost spec
-        )
-        .then_ignore(just(Token::Rcurl))
-        .try_map(move |cost_spec, span| {
-            let mut builder = match cost_spec {
-                Some((head, tail)) => {
-                    once(head).chain(tail).fold(
-                        // accumulate the `CostComp`s in a `CostSpecBuilder`
-                        CostSpecBuilder::default(),
-                        |builder, cost_comp| match cost_comp.item {
-                            CompoundAmount(compound_amount) => match compound_amount {
-                                BareCurrency(cur) => builder.currency(cur, cost_comp.span),
-                                BareAmount(amount) => builder.compound_expr(amount, cost_comp.span),
-                                CurrencyAmount(amount, cur) => builder
-                                    .compound_expr(amount, cost_comp.span)
-                                    .currency(cur, cost_comp.span),
+    maybe_box!(
+        just(Token::Lcurl)
+            .ignore_then(
+                group((
+                    cost_comp().map_with(spanned_extra),
+                    (just(Token::Comma).ignore_then(cost_comp().map_with(spanned_extra)))
+                        .repeated()
+                        .collect::<Vec<_>>(),
+                ))
+                .or_not(), // allow for empty cost spec
+            )
+            .then_ignore(just(Token::Rcurl))
+            .try_map(move |cost_spec, span| {
+                let mut builder = match cost_spec {
+                    Some((head, tail)) => {
+                        once(head).chain(tail).fold(
+                            // accumulate the `CostComp`s in a `CostSpecBuilder`
+                            CostSpecBuilder::default(),
+                            |builder, cost_comp| match cost_comp.item {
+                                CompoundAmount(compound_amount) => match compound_amount {
+                                    BareCurrency(cur) => builder.currency(cur, cost_comp.span),
+                                    BareAmount(amount) => builder.compound_expr(amount, cost_comp.span),
+                                    CurrencyAmount(amount, cur) => builder
+                                        .compound_expr(amount, cost_comp.span)
+                                        .currency(cur, cost_comp.span),
+                                },
+                                Date(date) => builder.date(date, cost_comp.span),
+                                Label(s) => builder.label(s, cost_comp.span),
+                                Merge => builder.merge(cost_comp.span),
                             },
-                            Date(date) => builder.date(date, cost_comp.span),
-                            Label(s) => builder.label(s, cost_comp.span),
-                            Merge => builder.merge(cost_comp.span),
-                        },
-                    )
-                }
-                None => CostSpecBuilder::default(),
-            };
-            builder
-                .build()
-                .map_err(|e| Rich::custom(span, e.to_string()))
-        })
+                        )
+                    }
+                    None => CostSpecBuilder::default(),
+                };
+                builder
+                    .build()
+                    .map_err(|e| Rich::custom(span, e.to_string()))
+            })
+    )
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -1030,43 +1083,45 @@ pub(crate) fn tags_links<'s, I>()
 where
     I: BorrowInput<'s, Token = Token<'s>, Span = Span_>,
 {
-    choice((
-        tag().map_with(spanned_extra).map(Either::Left),
-        link().map_with(spanned_extra).map(Either::Right),
-    ))
-    .repeated()
-    .collect::<Vec<_>>()
-    .validate(|tags_or_links, _span, emitter| {
-        tags_or_links.into_iter().fold(
-            (HashSet::new(), HashSet::new()),
-            |(mut tags, mut links), item| match item {
-                Either::Left(tag) => {
-                    if tags.contains(&tag) {
-                        emitter.emit(Rich::custom(
-                            tag.span.into(),
-                            format!("duplicate tag {}", tag),
-                        ))
-                    } else {
-                        tags.insert(tag);
-                    }
+    maybe_box!(
+        choice((
+            tag().map_with(spanned_extra).map(Either::Left),
+            link().map_with(spanned_extra).map(Either::Right),
+        ))
+        .repeated()
+        .collect::<Vec<_>>()
+        .validate(|tags_or_links, _span, emitter| {
+            tags_or_links.into_iter().fold(
+                (HashSet::new(), HashSet::new()),
+                |(mut tags, mut links), item| match item {
+                    Either::Left(tag) => {
+                        if tags.contains(&tag) {
+                            emitter.emit(Rich::custom(
+                                tag.span.into(),
+                                format!("duplicate tag {}", tag),
+                            ))
+                        } else {
+                            tags.insert(tag);
+                        }
 
-                    (tags, links)
-                }
-                Either::Right(link) => {
-                    if links.contains(&link) {
-                        emitter.emit(Rich::custom(
-                            link.span.into(),
-                            format!("duplicate link {}", link),
-                        ))
-                    } else {
-                        links.insert(link);
+                        (tags, links)
                     }
+                    Either::Right(link) => {
+                        if links.contains(&link) {
+                            emitter.emit(Rich::custom(
+                                link.span.into(),
+                                format!("duplicate link {}", link),
+                            ))
+                        } else {
+                            links.insert(link);
+                        }
 
-                    (tags, links)
-                }
-            },
-        )
-    })
+                        (tags, links)
+                    }
+                },
+            )
+        })
+    )
 }
 
 /// Matches a bool
@@ -1092,7 +1147,7 @@ where
 {
     use Token::*;
 
-    recursive(|expr| {
+    maybe_box!(recursive(|expr| {
         // Match a parenthesized expression
         let parens = expr
             .clone()
@@ -1135,7 +1190,7 @@ where
             .repeated(),
             |lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)),
         )
-    })
+    }))
 }
 
 /// Matches a Tag

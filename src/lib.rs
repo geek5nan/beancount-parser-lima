@@ -317,7 +317,7 @@ impl BeancountSources {
             .filter_map(|(i, c)| (c == '\n').then_some(i)).collect();
         let mut line_offsets: Vec<Vec<usize>> = vec![Vec::new(); source_id_strings.len()];
         line_offsets[Into::<usize>::into(root_source_id)] = nl(&root_content);
-        for (_, s) in &included_content {
+        for s in included_content.values() {
             if let IncludedSource::Content(id, c, _) = s {
                 line_offsets[Into::<usize>::into(*id)] = nl(c);
             }
